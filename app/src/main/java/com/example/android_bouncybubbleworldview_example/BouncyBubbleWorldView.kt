@@ -215,7 +215,7 @@ class BouncyBubbleWorldView @JvmOverloads constructor(
             const val RESTITUTION: Float = 0.6f // The restitution (elasticity) usually in the range [0,1].
             const val DENSITY: Float = 1f // The density, usually in kg/m^2.
             const val LINEAR_DAMPING: Float = 1f // This limits the maximum speed.
-            const val INITIAL_IMPULSE: Float = 0.005f // The world impulse vector, usually in N-seconds or kg-m/s.
+            const val INITIAL_IMPULSE: Float = 0.01f // The world impulse vector, usually in N-seconds or kg-m/s.
         }
 
         private object Simulation {
