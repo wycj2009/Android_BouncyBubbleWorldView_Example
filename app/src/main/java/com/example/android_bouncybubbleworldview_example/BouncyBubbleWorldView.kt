@@ -13,6 +13,7 @@ import android.view.ViewGroup
 import androidx.core.view.doOnLayout
 import com.example.android_bouncybubbleworldview_example.BouncyBubbleWorldView.Barrier
 import com.example.android_bouncybubbleworldview_example.BouncyBubbleWorldView.Bubble
+import com.example.android_bouncybubbleworldview_example.BouncyBubbleWorldView.BubbleWorld
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -29,10 +30,21 @@ import kotlin.math.roundToInt
 import kotlin.random.Random
 
 /**
- * A custom view that implements bubble animation with raw data updated by simulation in virtual physical world.
+ * This view implements bubble animation with raw data updated by simulation in virtual physical world.
  * [Barrier] is placed on the first layout.
- * [Bubble] will be added as a child view of [BouncyBubbleWorldView] inside the [Barrier] when placed.
+ * [Bubble] may be added as a child view of [BouncyBubbleWorldView] inside the [Barrier].
+ * If [Bubble] is out of [Barrier], it will be transformed inside [Barrier].
  * Apply gravity and acceleration effects using sensors.
+ *
+ *   ㅣ         ㅣ   ㅣ
+ *   ㅣ         ㅣ   ㅣ
+ *   ㅣ         ㅣ   ㅣ <- [Barrier] Bounds (the top of barrier is open)
+ *   ㅣ_ _ _ _ _ㅣ   ㅣ
+ *   ㅣ  o  o   ㅣ   ㅣ   ㅣ
+ *   ㅣ   o  o  ㅣ   ㅣ   ㅣ
+ *   ㅣ o  o   oㅣ   ㅣ   ㅣ <- [BouncyBubbleWorldView] Bounds
+ *   ㅣ_ _ _ _ _ㅣ   ㅣ   ㅣ
+ *   [BubbleWorld]
  */
 class BouncyBubbleWorldView @JvmOverloads constructor(
     context: Context,
@@ -109,6 +121,33 @@ class BouncyBubbleWorldView @JvmOverloads constructor(
         }
     }
 
+    init {
+        doOnLayout {
+            barrier = Barrier(
+                width = this.measuredWidth.toFloat(),
+                height = this.measuredHeight * 2f,
+                centerX = this.measuredWidth * 0.5f,
+                centerY = 0f,
+                destCenterX = this.measuredWidth * 0.5f,
+                destCenterY = 0f
+            )
+            bubbleWorld.initBarrier(barrier)
+            isInitialized = true
+            onInitialized?.invoke(this)
+        }
+        addOnAttachStateChangeListener(object : OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) {
+                sensor.register()
+                bubbleWorld.startSimulation()
+            }
+
+            override fun onViewDetachedFromWindow(v: View) {
+                sensor.unregister()
+                bubbleWorld.cancelSimulation()
+            }
+        })
+    }
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         super.onMeasure(widthMeasureSpec, heightMeasureSpec)
         bubbles.forEach {
@@ -143,33 +182,6 @@ class BouncyBubbleWorldView @JvmOverloads constructor(
         }
     }
 
-    init {
-        doOnLayout {
-            barrier = Barrier(
-                width = this.measuredWidth.toFloat(),
-                height = this.measuredHeight * 2f,
-                centerX = this.measuredWidth * 0.5f,
-                centerY = 0f,
-                destCenterX = this.measuredWidth * 0.5f,
-                destCenterY = 0f
-            )
-            bubbleWorld.initBarrier(barrier)
-            isInitialized = true
-            onInitialized?.invoke(this)
-        }
-        addOnAttachStateChangeListener(object : OnAttachStateChangeListener {
-            override fun onViewAttachedToWindow(v: View) {
-                sensor.register()
-                bubbleWorld.startSimulation()
-            }
-
-            override fun onViewDetachedFromWindow(v: View) {
-                sensor.unregister()
-                bubbleWorld.cancelSimulation()
-            }
-        })
-    }
-
     fun addBubbles(intervalMillis: Long, vararg bubble: Bubble) {
         CoroutineScope(Dispatchers.Main).launch {
             bubble.forEach { bubble: Bubble ->
@@ -194,14 +206,15 @@ class BouncyBubbleWorldView @JvmOverloads constructor(
         private const val SCREEN_TO_WORLD_RATIO: Float = 2000f // Defines how many pixels correspond to 1 meter.
 
         private object Sensor {
-            const val GRAVITY_CORRECTION_VALUE: Float = 0.4f
-            const val LINEAR_ACCELERATION_CORRECTION_VALUE: Float = 1.8f
+            const val GRAVITY_CORRECTION_VALUE: Float = 0.6f
+            const val LINEAR_ACCELERATION_CORRECTION_VALUE: Float = 2.4f
         }
 
         private object Body {
             const val FRICTION: Float = 0.4f // The friction coefficient, usually in the range [0,1].
             const val RESTITUTION: Float = 0.6f // The restitution (elasticity) usually in the range [0,1].
             const val DENSITY: Float = 1f // The density, usually in kg/m^2.
+            const val LINEAR_DAMPING: Float = 1f // This limits the maximum speed.
             const val INITIAL_IMPULSE: Float = 0.005f // The world impulse vector, usually in N-seconds or kg-m/s.
         }
 
@@ -249,10 +262,10 @@ class BouncyBubbleWorldView @JvmOverloads constructor(
                                 userData.centerX = body.position.x.metersToPixels()
                                 userData.centerY = body.position.y.metersToPixels()
                                 if (userData.isOutOfBarrier()) {
-                                    val initPosition: Vec2 = userData.getInitPosition()
-                                    body.setTransform(initPosition, 0f)
-                                    userData.centerX = initPosition.x.metersToPixels()
-                                    userData.centerY = initPosition.y.metersToPixels()
+                                    val coercedPosition: Vec2 = userData.getPositionWhenOutOfBarrier()
+                                    body.setTransform(coercedPosition, userData.radius)
+                                    userData.centerX = coercedPosition.x.metersToPixels()
+                                    userData.centerY = coercedPosition.y.metersToPixels()
                                 }
                                 userData.rotation = Math.toDegrees(body.angle.toDouble()).toFloat()
                                 userData.view.rotation = userData.rotation
@@ -289,17 +302,6 @@ class BouncyBubbleWorldView @JvmOverloads constructor(
                 restitution = Body.RESTITUTION
                 density = Body.DENSITY
             }
-            val fixtureDefTop = FixtureDef().apply {
-                shape = PolygonShape().apply {
-                    setAsEdge(
-                        Vec2(-barrierHalfWidth, -barrierHalfHeight),
-                        Vec2(barrierHalfWidth, -barrierHalfHeight)
-                    )
-                }
-                friction = Body.FRICTION
-                restitution = Body.RESTITUTION
-                density = Body.DENSITY
-            }
             val fixtureDefRight = FixtureDef().apply {
                 shape = PolygonShape().apply {
                     setAsEdge(
@@ -324,7 +326,6 @@ class BouncyBubbleWorldView @JvmOverloads constructor(
             }
             barrierBody = world.createBody(bodyDef).apply {
                 createFixture(fixtureDefLeft)
-                createFixture(fixtureDefTop)
                 createFixture(fixtureDefRight)
                 createFixture(fixtureDefBottom)
                 userData = barrier
@@ -342,7 +343,7 @@ class BouncyBubbleWorldView @JvmOverloads constructor(
         fun createBubble(bubble: Bubble) {
             val bodyDef = BodyDef().apply {
                 type = BodyType.DYNAMIC
-                position.set(bubble.getInitPosition())
+                position.set(bubble.getPositionWhenCreate())
             }
             val fixtureDef = FixtureDef().apply {
                 shape = CircleShape().apply {
@@ -356,6 +357,7 @@ class BouncyBubbleWorldView @JvmOverloads constructor(
                 it.createFixture(fixtureDef)
                 it.m_mass = Math.PI.toFloat() * fixtureDef.shape.m_radius
                 it.userData = bubble
+                it.linearDamping = Body.LINEAR_DAMPING
                 val impulse = Vec2(((Random.nextFloat() * 2f) - 1f) * Body.INITIAL_IMPULSE, Body.INITIAL_IMPULSE)
                 it.applyLinearImpulse(impulse, it.position) // Give the body an initial speed.
             }
@@ -373,11 +375,22 @@ class BouncyBubbleWorldView @JvmOverloads constructor(
             }
         }
 
-        private fun Bubble.getInitPosition(): Vec2 {
+        private fun Bubble.getPositionWhenCreate(): Vec2 {
             val barrier: Barrier = barrierBody.userData as Barrier
-            val initCenterX: Float = (barrier.centerX + ((barrier.width - (this.radius * 2f)) * (Random.nextFloat() - 0.5f))).pixelsToMeters()
-            val initCenterY: Float = -this.radius.pixelsToMeters()
-            return Vec2(initCenterX, initCenterY)
+            val centerX: Float = (barrier.centerX + ((barrier.width - (this.radius * 2f)) * (Random.nextFloat() - 0.5f))).pixelsToMeters()
+            val centerY: Float = -this.radius.pixelsToMeters()
+            return Vec2(centerX, centerY)
+        }
+
+        private fun Bubble.getPositionWhenOutOfBarrier(): Vec2 {
+            val barrier: Barrier = barrierBody.userData as Barrier
+            val halfBarrierWidth: Float = barrier.width * 0.5f
+            val centerX: Float = this.centerX.also {
+                it.coerceAtLeast(barrier.centerX - halfBarrierWidth + this.radius)
+                it.coerceAtMost(barrier.centerX + halfBarrierWidth - this.radius)
+            }.pixelsToMeters()
+            val centerY: Float = (barrier.centerY - (barrier.height * 0.5f) + this.radius).pixelsToMeters()
+            return Vec2(centerX, centerY)
         }
 
         private fun Bubble.isOutOfBarrier(): Boolean {
