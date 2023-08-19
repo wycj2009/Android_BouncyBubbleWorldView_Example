@@ -385,10 +385,10 @@ class BouncyBubbleWorldView @JvmOverloads constructor(
         private fun Bubble.getPositionWhenOutOfBarrier(): Vec2 {
             val barrier: Barrier = barrierBody.userData as Barrier
             val halfBarrierWidth: Float = barrier.width * 0.5f
-            val centerX: Float = this.centerX.also {
-                it.coerceAtLeast(barrier.centerX - halfBarrierWidth + this.radius)
-                it.coerceAtMost(barrier.centerX + halfBarrierWidth - this.radius)
-            }.pixelsToMeters()
+            val centerX: Float = this.centerX
+                .coerceAtLeast(barrier.centerX - halfBarrierWidth + this.radius)
+                .coerceAtMost(barrier.centerX + halfBarrierWidth - this.radius)
+                .pixelsToMeters()
             val centerY: Float = (barrier.centerY - (barrier.height * 0.5f) + this.radius).pixelsToMeters()
             return Vec2(centerX, centerY)
         }
